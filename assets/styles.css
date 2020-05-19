@@ -1,0 +1,98 @@
+html {
+    margin: 0;
+    padding: 0;
+}
+body {
+    margin: 0;
+    height: 100%;
+    background-color: #F2D474/*#80D0FF*/;
+    font-family: 'Comic Sans MS';
+}
+.goBack {
+    background-color: #ffd6aa;
+    color: rgb(0, 0, 0);
+    border: none;
+    padding: 15px 32px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    cursor: pointer;
+    -webkit-transition-duration: 0.4s; /* Safari */
+    transition-duration: 0.4s;
+    width: 100%;
+    height: 40px;
+    position: fixed;
+    bottom: 0px;
+}
+.goBack:hover {
+    background-color: #fda84d;
+    color: white;
+}
+.div-1 {
+    margin: 0;
+    padding: 0
+}
+.h1-1 {
+    margin: 0;
+    padding: 0
+}
+.div-2 {
+    background-color: white;
+    border-radius: 15px;
+    height: 100px;
+    width: 10%;
+    margin: 2%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.custom-tabs-container {
+    width: 85%;
+}
+.custom-tabs {
+    border-top-left-radius: 3px;
+    background-color: #f9f9f9;
+    padding: 0px 24px;
+    border-bottom: 1px solid #d6d6d6;
+}
+
+.custom-tab {
+    color:#586069;
+    border-top-left-radius: 3px;
+    border-top-right-radius: 3px;
+    border-top: 3px solid transparent !important;
+    border-left: 0px !important;
+    border-right: 0px !important;
+    border-bottom: 0px !important;
+    background-color: #fafbfc;
+    padding: 12px !important;
+    font-family: "system-ui";
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+}
+.custom-tab--selected {
+    color: black;
+    box-shadow: 1px 1px 0px white;
+    border-left: 1px solid lightgrey !important;
+    border-right: 1px solid lightgrey !important;
+    border-top: 3px solid #e36209 !important;
+}
+.update-button {
+    padding: 10px 15px;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    margin: 10px 75px;
+    transition-duration: 0.4s;
+    cursor: pointer;
+    background-color: white; 
+    color: black; 
+    border: 2px solid #008CBA;
+}
+.update-button:hover {
+    background-color: #008CBA;
+    color: white;
+}
