@@ -1,4 +1,4 @@
-from apiclient.discovery import build
+from googleapiclient.discovery import build
 from oauth2client.service_account import ServiceAccountCredentials
 import dash
 from dash.dependencies import Output, Input
@@ -12,6 +12,12 @@ from plotly import subplots
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import os
+
+
+import psycopg2
+
+# DATABASE_URL = os.environ['DATABASE_URL']			for Heroku Hosting Purpose
 
 column_names_real_time_geo = ['country', 'region', 'city', 'longitude', 'latitude', 'medium', 'source', 'users', 'text']
 column_names_overview_geo = ['country', 'region', 'city', 'longitude', 'latitude', 'users', 'sessions', 'UniquePageviews', 'bounceRate', 'avgSessionDuration', 'hits', 'text']
@@ -27,9 +33,6 @@ column_names_users = ['visitorType','users']
 column_names_overall = ['Users','Sessions','Avg. Session Duration','Pageviews','Pageviews Per Session','Bounce Rate','Avg. Time On Page','Hits', 'Unique Pageviews']
 
 df = pd.DataFrame(columns=column_names_real_time_geo)
-df_1 = pd.DataFrame(columns=column_names_overview_geo)
-df_2 = pd.DataFrame(columns=column_names_source_geo)
-df_3 = pd.DataFrame(columns=column_names_medium_geo)
 
 def get_service(api_name, api_version, scopes, key_file_location):
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(key_file_location, scopes=scopes)
@@ -96,6 +99,8 @@ def get_plot(df, col):
 	return plots
 
 app = dash.Dash(__name__, meta_tags=[{'name': 'viewport','content': 'width=device-width, initial-scale=1.0'}])
+
+# server = app.server			for Heroku Hosting Purpose
 
 app.config['suppress_callback_exceptions'] = True
 
@@ -285,7 +290,7 @@ def subplot_overview():
 
 def get_value_bandwidth(date):
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -302,42 +307,57 @@ def get_value_bandwidth(date):
 	return response
 
 def plot_bandwidth():
+	conn = psycopg2.connect(DATABASE_URL)
+	cur = conn.cursor()
+
 	today_date = datetime.today().strftime('%Y-%m-%d')
-	date_list = pd.date_range(end = datetime.today(), periods = 7).to_pydatetime().tolist()
+	date_list = pd.date_range(end = datetime.today(), periods = 11).to_pydatetime().tolist()
+	date_list.pop()
 	for i in range(len(date_list)):
 		date_list[i] = date_list[i].strftime('%Y-%m-%d')
 	content = []
+	query = "select pageviews, users, date, description from bandwidth where date = \'{0}\'"
 	for i in date_list:
-		response = get_value_bandwidth(i)
-		for report in response.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content.append(['0','0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content.append(dum)
+		cur.execute(query.format(i))
+		result = cur.fetchall()
+		if len(result) == 0:
+			response = get_value_bandwidth(i)
+			for report in response.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into bandwidth(pageviews, users, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\')".format("0","0",i,""))
+					content.append(['0','0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into bandwidth(pageviews, users, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\')".format(dum[0],dum[1],dum[2],dum[3]))
+					content.append(dum)
+		else:
+			content.append(list(result[0]))
 	dataf = pd.DataFrame(content, columns=column_names_bandwidth)
-	dataf['bandwidth'] = (dataf['users'].astype(int)*dataf['pageviews'].astype(int)*1.55*4.5).map('{:,.2f}'.format).astype(float)
-	dataf['avgBandwidth'] = (dataf['bandwidth']/dataf['users'].astype(int)).map('{:,.2f}'.format).astype(float)
-	dataf['text'] = 'Users : '+dataf['users']+'<br>'+'Total Bandwidth per Day : '+dataf['bandwidth'].astype(str)
+	dataf['bandwidth'] = (dataf['users'].astype(int)*dataf['pageviews'].astype(int)*1.55*4.5).map('{:.2f}'.format).astype(float)
+	dataf['avgBandwidth'] = (dataf['bandwidth']/dataf['users'].astype(int)).map('{:.2f}'.format).astype(float)
+	dataf['text'] = 'Users : '+dataf['users']+'<br>'+'Total Bandwidth per Day : '+dataf['bandwidth'].astype(str)+ " MBps"
 	fig1 = go.Bar(x=dataf['date'], y=dataf['bandwidth'], marker = dict(color='indianred'), text = dataf['text'], name="Bandwidth")
-	fig2 = go.Bar(x=dataf['date'], y=dataf['avgBandwidth'], marker = dict(color='lightsalmon'), text = 'Avg. Bandwidth per User : '+dataf['avgBandwidth'].astype(str), name="Avg. Bandwidth")
+	fig2 = go.Bar(x=dataf['date'], y=dataf['avgBandwidth'], marker = dict(color='lightsalmon'), text = 'Avg. Bandwidth per User : '+dataf['avgBandwidth'].astype(str)+" MBps", name="Avg. Bandwidth")
+	conn.commit()
+	cur.close()
+	conn.close()
 	return fig1, fig2
 
-def get_value_system(date):
+def get_value_system1(date):
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -352,6 +372,13 @@ def get_value_system(date):
 						}]
 					}
 				).execute()
+	return response1
+def get_value_system2(date):
+	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
+	VIEW_ID = 'YOUR VIEW ID'
+	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
+	analytics = build('analyticsreporting', 'v4', credentials=credentials)
 	response2 = analytics.reports().batchGet(
 					body={
 						'reportRequests': [
@@ -363,6 +390,13 @@ def get_value_system(date):
 						}]
 					}
 				).execute()
+	return response2
+def get_value_system3(date):
+	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
+	VIEW_ID = 'YOUR VIEW ID'
+	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
+	analytics = build('analyticsreporting', 'v4', credentials=credentials)
 	response3 = analytics.reports().batchGet(
 					body={
 						'reportRequests': [
@@ -374,71 +408,107 @@ def get_value_system(date):
 						}]
 					}
 				).execute()
-	return response1, response2, response3
+	return response3
 
 def plot_system():
+	conn = psycopg2.connect(DATABASE_URL)
+	cur = conn.cursor()
+
 	today_date = datetime.today().strftime('%Y-%m-%d')
 	date_list = pd.date_range(end = datetime.today(), periods = 11).to_pydatetime().tolist()
 	date_list.pop()
 	for i in range(len(date_list)):
 		date_list[i] = date_list[i].strftime('%Y-%m-%d')
 	content1, content2, content3 = [], [], []
+	query1 = "select operatingSystem, users, date, description from os where date = \'{0}\'"
+	query2 = "select browser, users, date, description from browser where date = \'{0}\'"
+	query3 = "select deviceCategory, users, date, description from device where date = \'{0}\'"
 	for i in date_list:
-		response1, response2, response3 = get_value_system(i)
-		for report in response1.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content1.append([None,'0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content1.append(dum)
-		for report in response2.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content2.append([None,'0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content2.append(dum)
-		for report in response3.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content3.append([None,'0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content3.append(dum)
+		cur.execute(query1.format(i))
+		result1 = cur.fetchall()
+		cur.execute(query2.format(i))
+		result2 = cur.fetchall()
+		cur.execute(query3.format(i))
+		result3 = cur.fetchall()
+
+		if len(result1)==0:
+			response1 = get_value_system1(i)
+			for report in response1.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into os(operatingSystem, users, date, description) values({0},\'{1}\',\'{2}\',\'{3}\')".format("NULL","0",i,""))
+					content1.append([None,'0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into os(operatingSystem, users, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\')".format(dum[0],dum[1],dum[2],dum[3]))
+					content1.append(dum)
+		else:
+			content1.append(list(result1[0]))
+
+		if len(result2)==0:
+			response2 = get_value_system2(i)
+			for report in response2.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into browser(browser, users, date, description) values({0},\'{1}\',\'{2}\',\'{3}\')".format("NULL","0",i,""))
+					content2.append([None,'0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into browser(browser, users, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\')".format(dum[0],dum[1],dum[2],dum[3]))
+					content2.append(dum)
+		else:
+			content2.append(list(result2[0]))
+
+		if len(result3)==0:
+			response3 = get_value_system3(i)
+			for report in response3.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into device(deviceCategory, users, date, description) values({0},\'{1}\',\'{2}\',\'{3}\')".format("NULL","0",i,""))
+					content3.append([None,'0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into device(deviceCategory, users, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\')".format(dum[0],dum[1],dum[2],dum[3]))
+					content3.append(dum)
+		else:
+			content3.append(list(result3[0]))
+
+	conn.commit()
+	cur.close()
+	conn.close()
 
 	dataf1 = pd.DataFrame(content1, columns=column_names_os)
 	dataf2 = pd.DataFrame(content2, columns=column_names_browser)
@@ -450,7 +520,7 @@ def plot_system():
 
 def get_value_sessions(date):
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -467,42 +537,59 @@ def get_value_sessions(date):
 	return response
 
 def plot_sessions():
+	conn = psycopg2.connect(DATABASE_URL)
+	cur = conn.cursor()
+
 	today_date = datetime.today().strftime('%Y-%m-%d')
 	date_list = pd.date_range(end = datetime.today(), periods = 11).to_pydatetime().tolist()
 	date_list.pop()
 	for i in range(len(date_list)):
 		date_list[i] = date_list[i].strftime('%Y-%m-%d')
 	content = []
+	query = "select sessions, bounceRate, hits, date, description from sessions where date = \'{0}\'"
+
 	for i in date_list:
-		response = get_value_sessions(i)
-		for report in response.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content.append(['0','0','0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content.append(dum)
+		cur.execute(query.format(i))
+		result = cur.fetchall()
+		if len(result)==0:
+			response = get_value_sessions(i)
+			for report in response.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into sessions(sessions, bounceRate, hits, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\',\'{4}\')".format("0","0","0",i,""))
+					content.append(['0','0','0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into sessions(sessions, bounceRate, hits, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\',\'{4}\')".format(dum[0],dum[1],dum[2],dum[3],dum[4]))
+					content.append(dum)
+		else:
+			content.append(list(result[0]))
+	
+	conn.commit()
+	cur.close()
+	conn.close()
+
 	dataf = pd.DataFrame(content, columns=column_names_sessions)
 	dataf['bounceRate'] = (dataf['bounceRate'].astype(float)).map('{:.2f}'.format).astype(float)
-	fig1 = go.Scatter(x=dataf['date'], y=dataf['sessions'], marker_size = dataf['sessions'].astype(int), mode = "markers+lines", name= "Sessions")
-	fig2 = go.Scatter(x=dataf['date'], y=dataf['bounceRate'], marker_size = dataf['bounceRate'].astype(int), mode = "markers+lines", name = "Bounce Rate")
-	fig3 = go.Scatter(x=dataf['date'], y=dataf['hits'], marker_size = dataf['hits'].astype(int), mode = "markers+lines", name = "Hits")
+	fig1 = go.Scatter(x=dataf['date'], y=dataf['sessions'], marker_size = dataf['sessions'].astype(int)*0.65, mode = "markers+lines", name= "Sessions")
+	fig2 = go.Scatter(x=dataf['date'], y=dataf['bounceRate'], marker_size = dataf['bounceRate'].astype(int)*0.65, mode = "markers+lines", name = "Bounce Rate")
+	fig3 = go.Scatter(x=dataf['date'], y=dataf['hits'], marker_size = dataf['hits'].astype(int)*0.65, mode = "markers+lines", name = "Hits")
 	return fig1, fig2, fig3
 
 def get_value_pageviews(date):
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -519,32 +606,48 @@ def get_value_pageviews(date):
 	return response
 
 def plot_pageviews():
+	conn = psycopg2.connect(DATABASE_URL)
+	cur = conn.cursor()
+
 	today_date = datetime.today().strftime('%Y-%m-%d')
 	date_list = pd.date_range(end = datetime.today(), periods = 11).to_pydatetime().tolist()
 	date_list.pop()
 	for i in range(len(date_list)):
 		date_list[i] = date_list[i].strftime('%Y-%m-%d')
 	content = []
+	query = "select pageviews, pageviewsPerSession, uniquePageviews, avgTimeOnPage, date, description from pageviews where date = \'{0}\'"
+
 	for i in date_list:
-		response = get_value_pageviews(i)
-		for report in response.get('reports', []):
-			columnHeader = report.get('columnHeader', {})
-			dimensionHeaders = columnHeader.get('dimensions', [])
-			metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
-			if 'rows' not in list(report.get('data', {}).keys()):
-				content.append(['0','0','0','0',i,''])
-			for row in report.get('data', {}).get('rows', []):
-				dum = []
-				dimensions = row.get('dimensions', [])
-				dateRangeValues = row.get('metrics', [])
-				for header, dimension in zip(dimensionHeaders, dimensions):
-					dum.append(dimension)
-				for values in dateRangeValues:
-					for value in values.get('values'):
-						dum.append(value)
-					dum.append(i)
-					dum.append('')
-				content.append(dum)
+		cur.execute(query.format(i))
+		result = cur.fetchall()
+		if len(result)==0:
+			response = get_value_pageviews(i)
+			for report in response.get('reports', []):
+				columnHeader = report.get('columnHeader', {})
+				dimensionHeaders = columnHeader.get('dimensions', [])
+				metricHeaders = columnHeader.get('metricHeader', {}).get('metricHeaderEntries', [])
+				if 'rows' not in list(report.get('data', {}).keys()):
+					cur.execute("insert into pageviews(pageviews, pageviewsPerSession, uniquePageviews, avgTimeOnPage, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\',\'{4}\',\'{5}\')".format("0","0","0","0",i,""))
+					content.append(['0','0','0','0',i,''])
+				for row in report.get('data', {}).get('rows', []):
+					dum = []
+					dimensions = row.get('dimensions', [])
+					dateRangeValues = row.get('metrics', [])
+					for header, dimension in zip(dimensionHeaders, dimensions):
+						dum.append(dimension)
+					for values in dateRangeValues:
+						for value in values.get('values'):
+							dum.append(value)
+						dum.append(i)
+						dum.append('')
+					cur.execute("insert into pageviews(pageviews, pageviewsPerSession, uniquePageviews, avgTimeOnPage, date, description) values(\'{0}\',\'{1}\',\'{2}\',\'{3}\',\'{4}\',\'{5}\')".format(dum[0],dum[1],dum[2],dum[3],dum[4],dum[5]))
+					content.append(dum)
+		else:
+			content.append(list(result[0]))
+
+	conn.commit()
+	cur.close()
+	conn.close()
 
 	dataf = pd.DataFrame(content, columns=column_names_pageviews)
 	dataf['pageviewsPerSession'] = (dataf['pageviewsPerSession'].astype(float)).map('{:.0f}'.format).astype(float)
@@ -561,7 +664,7 @@ def plot_pageviews():
 
 def get_value_users():
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -604,7 +707,7 @@ def plot_users():
 
 def get_value_overall():
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -648,7 +751,7 @@ def plot_overall():
 
 def get_plot_general():
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -712,7 +815,7 @@ def update_general_or_traffic_source(selected_option):
 
 def update_traffic_graph(value):
 	SCOPES = ['https://www.googleapis.com/auth/analytics.readonly']
-	KEY_FILE_LOCATION = 'YOUR FILE LOCATION'
+	KEY_FILE_LOCATION = 'YOUR CREDENTIAL FILE LOCATION'
 	VIEW_ID = 'YOUR VIEW ID'
 	credentials = ServiceAccountCredentials.from_json_keyfile_name(KEY_FILE_LOCATION, SCOPES)
 	analytics = build('analyticsreporting', 'v4', credentials=credentials)
@@ -792,7 +895,7 @@ def update_manually_or_go_live(selected_option):
 				),
 				dcc.Interval(
 					id='graph-update',
-					interval=1000*20
+					interval=1000*100
 				)
 			]
 		]
@@ -813,7 +916,7 @@ def update_manually_or_go_live(selected_option):
 @app.callback(Output('live-graph-1','figure'),[Input('graph-update','n_intervals')])
 def update_live_graph(self):
 	scope = 'https://www.googleapis.com/auth/analytics.readonly'
-	key_file_location = 'YOUR FILE LOCATION'
+	key_file_location = 'YOUR CREDENTIAL FILE LOCATION'
 	service = get_service(api_name='analytics', api_version='v3', scopes=[scope], key_file_location=key_file_location)
 	profile_id = get_first_profile_id(service)
 	results = get_results(service, profile_id)
@@ -827,7 +930,7 @@ def update_live_graph(self):
 @app.callback(Output('live-graph-2','figure'),[Input('clicked-button-1','n_clicks')])
 def update_live_graph(n_clicks):
 	scope = 'https://www.googleapis.com/auth/analytics.readonly'
-	key_file_location = 'YOUR FILE LOCATION'
+	key_file_location = 'YOUR CREDENTIAL FILE LOCATION'
 	service = get_service(api_name='analytics', api_version='v3', scopes=[scope], key_file_location=key_file_location)
 	profile_id = get_first_profile_id(service)
 	results = get_results(service, profile_id)
@@ -839,4 +942,4 @@ def update_live_graph(n_clicks):
 	return get_plot(dataf, "latitude")
 
 if __name__ == '__main__':
-	app.run_server(debug=False)
+	app.run_server(debug=True)
